@@ -27,8 +27,8 @@ max_lines_all=(50000 30000 60000)
 max_lines=${max_lines_all[$SGE_TASK_ID-1]}
 
 EXP_ID="basic"
-MODEL_NAME="$EXP_ID~l1-l2-epochs~$epochs-max_lines~$max_lines"
-TOKENIZER_NAME="$EXP_ID~l1-l2~max_lines-$max_lines"
+MODEL_NAME="$EXP_ID-l1~l2-epochs~$epochs-max_lines~$max_lines"
+TOKENIZER_NAME="$EXP_ID-l1~l2-max_lines~$max_lines"
 
 MODEL_OUTPUT_DIR="models/$MODEL_NAME"
 TOKENIZER_INPATH="tokenizers/$TOKENIZER_NAME"

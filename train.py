@@ -161,7 +161,7 @@ def get_multilingual_dataset_from_files(DATAFILES, max_lines, tokenizer, max_len
     return train_dataset, dev_dataset, test_dataset
 
 
-def get_multilingual_dataset(DATADIRS, max_lines, tokenizer, max_length = 512):
+def get_multilingual_dataset(DATADIRS, max_lines, tokenizer, max_length = 512, only_eval = False):
 
     '''
     This function assumes that each datadir in DATADIRS contains train, dev, and test splits, 
@@ -192,19 +192,23 @@ def get_multilingual_dataset(DATADIRS, max_lines, tokenizer, max_length = 512):
     DEV_FILES = [os.path.join(datadir, "dev") for datadir in DATADIRS]
     TEST_FILES = [os.path.join(datadir, "test") for datadir in DATADIRS]
 
+    if only_eval:
+        TRAIN_FILES = TEST_FILES
+        DEV_FILES = TEST_FILES
+
     all_datasets = list()
 
-    for idx, _ in enumerate(TRAIN_FILES):
+    for idx in range(len(TRAIN_FILES)):
         logging.info("Loading : {} ".format(TRAIN_FILES[idx]))
         data = load_dataset("text", data_files={"train": [TRAIN_FILES[idx]], \
         "dev": [DEV_FILES[idx]], "test": [TEST_FILES[idx]]})
-        data = data.select(range(max_lines))
+        
         all_datasets.append(data)
 
     
-    all_train_datasets = [dataset["train"] for dataset in all_datasets]
-    all_dev_datasets = [dataset["dev"] for dataset in all_datasets]
-    all_test_datasets = [dataset["test"] for dataset in all_datasets]
+    all_train_datasets = [dataset["train"].select(range(min(max_lines, len(dataset["train"])))) for dataset in all_datasets]
+    all_dev_datasets = [dataset["dev"].select(range(min(max_lines, len(dataset["dev"])))) for dataset in all_datasets]
+    all_test_datasets = [dataset["test"].select(range(min(max_lines, len(dataset["test"])))) for dataset in all_datasets]
 
     def find_probs(S = 0.7):
         all_lengths = [len(dataset) for dataset in all_train_datasets]
@@ -241,11 +245,12 @@ def get_multilingual_dataset(DATADIRS, max_lines, tokenizer, max_length = 512):
 
     logging.info("DONE TOKENIZING!")
 
-    train_data = train_data.with_format("torch")
-    dev_data = dev_data.with_format("torch")
-    test_data = test_data.with_format("torch")
+    train_dataset = train_dataset.with_format("torch")
+    dev_dataset = dev_dataset.with_format("torch")
+    test_dataset = test_dataset.with_format("torch")
     
     return train_dataset, dev_dataset, test_dataset
+
 
 def compute_metrics(pred):
     '''Compute perplexity'''
@@ -281,9 +286,25 @@ def main(args):
 
     # Get seq2seq model and tokenizer
     logging.info("Initializing tokenizer...")
-    FILES = [os.path.join(datadir, "train") for datadir in args.DATADIRS]
-    tokenizer = init_tokenizer(args.TOKENIZER_INPATH, \
+    DATADIRS = args.DATADIRS.split(",")
+
+    # Get seq2seq model and tokenizer
+    logging.info("Initializing tokenizer...")
+    if os.path.isdir(DATADIRS[0]):
+        FILES = [os.path.join(datadir, "train") for datadir in DATADIRS]
+    else:
+        # User has passed files, and we will split them later
+        ## TODO: Currently, this means that we are training our tokenizer even on the test data, in the case that the user passes files rather than splits.
+        ## This is bad. Change this,
+        ## or use sparingly.
+        FILES = DATADIRS
+    # If we are using a pretrained tokenizer, we don't want to pass FILES
+    if args.TOKENIZER_INPATH == args.MODELPATH:
+        tokenizer = init_tokenizer(args.TOKENIZER_INPATH)
+    else:
+        tokenizer = init_tokenizer(args.TOKENIZER_INPATH, \
                                FILES)
+        
 
     logging.info("Initializing models...")
     model = init_models(args.MODELPATH, tokenizer, args.PT_CKPT)
@@ -291,13 +312,13 @@ def main(args):
     logging.info("Getting datasets...")
     # Get dataset splits, and preprocess them
     ## If DATADIRS is a list of dirs, we've already split the data
-    if os.isdir(args.DATADIRS[0]):
+    if os.path.isdir(DATADIRS[0]):
         train_dataset, dev_dataset, test_dataset = \
-        get_multilingual_dataset(args.DATADIRS, max_lines=args.max_lines, tokenizer= tokenizer, max_length= args.max_length)
+        get_multilingual_dataset(DATADIRS, max_lines=args.max_lines, tokenizer= tokenizer, max_length= args.max_length)
     else:
     ## If DATADIRS is a list of files, we need to split the data
         train_dataset, dev_dataset, test_dataset = \
-        get_multilingual_dataset_from_files(args.DATADIRS, max_lines=args.max_lines, tokenizer= tokenizer, max_length= args.max_length)
+        get_multilingual_dataset_from_files(DATADIRS, max_lines=args.max_lines, tokenizer= tokenizer, max_length= args.max_length)
     
     # Instead of that, download some MT dataset from HF
     # tokenizer = AutoTokenizer.from_pretrained(args.ENC_DEC_MODELPATH)
@@ -355,9 +376,15 @@ def main(args):
     )   
 
     
-    logging.info("STARTING TRAINING")
-    logging.info(f"CUDA: {torch.cuda.is_available()}")
-    trainer.train(resume_from_checkpoint=args.resume_from_checkpoint)
+    if not args.only_eval:
+        logging.info(f"CUDA available: {torch.cuda.is_available()}")
+        print(f"Model device: {model.device}")
+        
+        logging.info("STARTING TRAINING")
+        trainer.train(resume_from_checkpoint=args.resume_from_checkpoint)
+
+        logging.info("SAVING MODEL")
+        model.save_pretrained(args.OUTPUT_DIR)
 
     logging.info("SAVING MODEL")
     model.save_pretrained(args.OUTPUT_DIR)
